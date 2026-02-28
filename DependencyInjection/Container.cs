@@ -26,14 +26,14 @@ namespace DependencyInjection
         private Container(Dictionary<ContainerKey, object>[] data)
         {
             _readWriteLock = new();
-            _scopedLazyDict = new();
             _singletonFactoryDict = data[0];
             _singletonLazyDict = data[1];
             _scopedFactoryDict = data[2];
-            _transientFactoryDict = data[3];
+            _scopedLazyDict = data[3];
+            _transientFactoryDict = data[4];
         }
 
-        public IContainer GetNextScope()
+        public IContainer BranchScope()
         {
             _readWriteLock.EnterReadLock();
             try
@@ -43,6 +43,7 @@ namespace DependencyInjection
                     _singletonFactoryDict.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
                     _singletonLazyDict.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
                     _scopedFactoryDict.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+                    _scopedLazyDict.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
                     _transientFactoryDict.ToDictionary(kvp => kvp.Key, kvp => kvp.Value)
                 };
                 return new Container(data);
@@ -55,43 +56,43 @@ namespace DependencyInjection
 
         public T Inject<T>(string key = "")
         {
+            ContainerKey containerKey = new(typeof(T), key);
             _readWriteLock.EnterReadLock();
             try
             {
-                ContainerKey containerKey = new(typeof(T), key);
                 if (_transientFactoryDict.ContainsKey(containerKey))
-                {
                     return ((Func<T>)_transientFactoryDict[containerKey]).Invoke();
-                }
-                else if (_scopedLazyDict.ContainsKey(containerKey))
-                {
-                    return (T)_scopedLazyDict[containerKey];
-                }
-                else if (_scopedFactoryDict.ContainsKey(containerKey))
-                {
-                    _scopedLazyDict[containerKey] = ((Func<T>)_scopedFactoryDict[containerKey]).Invoke()!;
-                    return (T)_scopedLazyDict[containerKey];
-                }
-                else if (_singletonLazyDict.ContainsKey(containerKey))
-                {
+
+                if (_singletonLazyDict.ContainsKey(containerKey))
                     return (T)_singletonLazyDict[containerKey];
-                }
-                else if (_singletonFactoryDict.ContainsKey(containerKey))
-                {
-                    _singletonLazyDict[containerKey] = _singletonFactoryDict[containerKey];
-                    return (T)_singletonLazyDict[containerKey];
-                }
-                else
-                {
-                    throw new InvalidOperationException($"Type {typeof(T)} with key '{key}' is not registered in the container.");
-                }
+
+                if (_scopedLazyDict.ContainsKey(containerKey))
+                    return (T)_scopedLazyDict[containerKey];
             }
             finally
             {
                 _readWriteLock.ExitReadLock();
             }
+            _readWriteLock.EnterWriteLock();
+            try
+            {
+                if (_scopedFactoryDict.ContainsKey(containerKey))
+                {
+                    _scopedLazyDict[containerKey] = ((Func<T>)_scopedFactoryDict[containerKey]).Invoke()!;
+                    return (T)_scopedLazyDict[containerKey];
+                }
+                if (_singletonFactoryDict.ContainsKey(containerKey))
+                {
+                    _singletonLazyDict[containerKey] = ((Func<T>)_singletonFactoryDict[containerKey]).Invoke()!;
+                    return (T)_singletonLazyDict[containerKey];
+                }
+                throw new InvalidOperationException($"Type {typeof(T)} with key '{key}' is not registered in the container.");
+            }
+            finally
+            {
+                _readWriteLock.ExitWriteLock();
+            }
         }
-
 
         public void RegisterSingleton<T>(Func<T> factory, string key = "")
         {
